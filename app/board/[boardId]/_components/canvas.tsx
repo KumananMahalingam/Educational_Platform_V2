@@ -43,6 +43,7 @@ import { LayerPreview } from "./layer-preview";
 import { SelectionBox } from "./selection-box";
 import { SelectionTools } from "./selection-tools";
 import { CursorsPresence } from "./cursors-presence";
+import { ProblemPanel } from "./problem-panel";
 
 const MAX_LAYERS = 100;
 const DEFAULT_IMAGE_WIDTH = 400;
@@ -57,6 +58,7 @@ export const Canvas = ({
   const layerIds = useStorage((root) => root.layerIds);
 
   const pencilDraft = useSelf((me) => me.presence.pencilDraft);
+  const selection = useSelf((me) => me.presence.selection);
   const [canvasState, setCanvasState] = useState<CanvasState>({
     mode: CanvasMode.None,
   });
@@ -539,6 +541,16 @@ export const Canvas = ({
     return layerIdsToColorSelection;
   }, [selections]);
 
+  const activeProblemSrc = useStorage((root) => {
+    for (const layerId of selection) {
+      const layer = root.layers[layerId];
+      if (layer?.type === LayerType.Image) {
+        return layer.src;
+      }
+    }
+    return null;
+  });
+
   const deleteLayers = useDeleteLayers();
 
   useEffect(() => {
@@ -598,6 +610,7 @@ export const Canvas = ({
         camera={camera}
         setLastUsedColor={setLastUsedColor}
       />
+      <ProblemPanel activeProblemSrc={activeProblemSrc} />
       <svg
         className="h-[100vh] w-[100vw]"
         onWheel={onWheel}
