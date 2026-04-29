@@ -1,5 +1,9 @@
+"use client";
+
+import { ChangeEvent, useRef } from "react";
 import { 
   Circle, 
+  ImagePlus,
   MousePointer2, 
   Pencil, 
   Redo2, 
@@ -20,6 +24,7 @@ interface ToolbarProps {
   redo: () => void;
   canUndo: boolean;
   canRedo: boolean;
+  onAddProblem: (file: File) => Promise<void>;
 };
 
 export const Toolbar = ({
@@ -29,7 +34,20 @@ export const Toolbar = ({
   redo,
   canUndo,
   canRedo,
+  onAddProblem,
 }: ToolbarProps) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const onImageSelected = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    await onAddProblem(file);
+    e.target.value = "";
+  };
+
   return (
     <div className="absolute top-[50%] -translate-y-[50%] left-2 flex flex-col gap-y-4">
       <div className="bg-white rounded-md p-1.5 flex gap-y-1 flex-col items-center shadow-md">
@@ -96,6 +114,11 @@ export const Toolbar = ({
           }
         />
         <ToolButton
+          label="Add Problem"
+          icon={ImagePlus}
+          onClick={() => fileInputRef.current?.click()}
+        />
+        <ToolButton
           label="Pen"
           icon={Pencil}
           onClick={() => setCanvasState({
@@ -104,6 +127,13 @@ export const Toolbar = ({
           isActive={
             canvasState.mode === CanvasMode.Pencil
           }
+        />
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/*"
+          className="hidden"
+          onChange={onImageSelected}
         />
       </div>
       <div className="bg-white rounded-md p-1.5 flex flex-col items-center shadow-md">

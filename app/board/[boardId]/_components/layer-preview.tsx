@@ -11,6 +11,7 @@ import { Ellipse } from "./ellipse";
 import { Rectangle } from "./rectangle";
 import { Note } from "./note";
 import { Path } from "./path";
+import { ImageLayer } from "./image-layer";
 
 interface LayerPreviewProps {
   id: string;
@@ -72,6 +73,15 @@ export const LayerPreview = memo(({
     case LayerType.Rectangle:
       return (
         <Rectangle
+          id={id}
+          layer={layer}
+          onPointerDown={onLayerPointerDown}
+          selectionColor={selectionColor}
+        />
+      );
+    case LayerType.Image:
+      return (
+        <ImageLayer
           id={id}
           layer={layer}
           onPointerDown={onLayerPointerDown}

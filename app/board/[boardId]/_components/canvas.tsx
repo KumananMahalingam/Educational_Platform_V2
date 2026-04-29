@@ -45,6 +45,7 @@ import { SelectionTools } from "./selection-tools";
 import { CursorsPresence } from "./cursors-presence";
 
 const MAX_LAYERS = 100;
+const DEFAULT_IMAGE_WIDTH = 400;
 
 interface CanvasProps {
   boardId: string;
@@ -65,6 +66,7 @@ export const Canvas = ({
     g: 0,
     b: 0,
   });
+  const [viewport, setViewport] = useState({ width: 0, height: 0 });
 
  
 
@@ -100,6 +102,92 @@ export const Canvas = ({
     setMyPresence({ selection: [layerId] }, { addToHistory: true });
     setCanvasState({ mode: CanvasMode.None });
   }, [lastUsedColor]);
+
+  const insertImageLayer = useMutation((
+    { storage, setMyPresence },
+    position: Point,
+    src: string,
+    width: number,
+    height: number,
+  ) => {
+    const liveLayers = storage.get("layers");
+    if (liveLayers.size >= MAX_LAYERS) {
+      return;
+    }
+
+    const liveLayerIds = storage.get("layerIds");
+    const layerId = nanoid();
+    const layer = new LiveObject({
+      type: LayerType.Image as const,
+      x: position.x,
+      y: position.y,
+      width,
+      height,
+      src,
+    });
+
+    liveLayerIds.push(layerId);
+    liveLayers.set(layerId, layer);
+
+    setMyPresence({ selection: [layerId] }, { addToHistory: true });
+    setCanvasState({ mode: CanvasMode.None });
+  }, []);
+
+  const loadImageSize = useCallback((src: string) => {
+    return new Promise<{ width: number; height: number }>((resolve, reject) => {
+      const image = new Image();
+      image.onload = () => resolve({ width: image.width, height: image.height });
+      image.onerror = () => reject(new Error("Failed to load image"));
+      image.src = src;
+    });
+  }, []);
+
+  const createImageLayerAtPoint = useCallback(async (src: string, point: Point) => {
+    const size = await loadImageSize(src);
+    if (!size.width || !size.height) {
+      return;
+    }
+    const height = (DEFAULT_IMAGE_WIDTH / size.width) * size.height;
+
+    insertImageLayer(point, src, DEFAULT_IMAGE_WIDTH, height);
+  }, [insertImageLayer, loadImageSize]);
+
+  const uploadImageFile = useCallback(async (file: File) => {
+    const formData = new FormData();
+    formData.append("file", file);
+
+    const response = await fetch("/api/upload-image", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      throw new Error("Image upload failed");
+    }
+
+    const data = await response.json() as { src: string };
+    return data.src;
+  }, []);
+
+  const addProblemImage = useCallback(async (file: File) => {
+    try {
+      const src = await uploadImageFile(file);
+      const size = await loadImageSize(src);
+      if (!size.width || !size.height) {
+        return;
+      }
+
+      const height = (DEFAULT_IMAGE_WIDTH / size.width) * size.height;
+      const center = {
+        x: -camera.x + viewport.width / 2 - DEFAULT_IMAGE_WIDTH / 2,
+        y: -camera.y + viewport.height / 2 - height / 2,
+      };
+
+      insertImageLayer(center, src, DEFAULT_IMAGE_WIDTH, height);
+    } catch {
+      // Ignore failed image uploads for now.
+    }
+  }, [camera.x, camera.y, insertImageLayer, loadImageSize, uploadImageFile, viewport.height, viewport.width]);
 
   const translateSelectedLayers = useMutation((
     { storage, self },
@@ -323,6 +411,36 @@ export const Canvas = ({
     setMyPresence({ cursor: null });
   }, []);
 
+  const onDragOver = useCallback((e: React.DragEvent<SVGSVGElement>) => {
+    e.preventDefault();
+  }, []);
+
+  const onDrop = useCallback(async (e: React.DragEvent<SVGSVGElement>) => {
+    e.preventDefault();
+
+    const file = e.dataTransfer.files?.[0];
+    if (!file || !file.type.startsWith("image/")) {
+      return;
+    }
+
+    try {
+      const src = await new Promise<string>((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result as string);
+        reader.onerror = () => reject(new Error("Failed to read dropped image"));
+        reader.readAsDataURL(file);
+      });
+
+      const point = {
+        x: Math.round(e.clientX) - camera.x,
+        y: Math.round(e.clientY) - camera.y,
+      };
+      await createImageLayerAtPoint(src, point);
+    } catch {
+      // Ignore invalid dropped files.
+    }
+  }, [camera.x, camera.y, createImageLayerAtPoint]);
+
   const onPointerDown = useCallback((
     e: React.PointerEvent,
   ) => {
@@ -424,6 +542,18 @@ export const Canvas = ({
   const deleteLayers = useDeleteLayers();
 
   useEffect(() => {
+    const onResize = () => {
+      setViewport({ width: window.innerWidth, height: window.innerHeight });
+    };
+    onResize();
+    window.addEventListener("resize", onResize);
+
+    return () => {
+      window.removeEventListener("resize", onResize);
+    };
+  }, []);
+
+  useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       switch (e.key) {
         // case "Backspace":
@@ -462,6 +592,7 @@ export const Canvas = ({
         canUndo={canUndo}
         undo={history.undo}
         redo={history.redo}
+        onAddProblem={addProblemImage}
       />
       <SelectionTools
         camera={camera}
@@ -474,6 +605,8 @@ export const Canvas = ({
         onPointerLeave={onPointerLeave}
         onPointerDown={onPointerDown}
         onPointerUp={onPointerUp}
+        onDragOver={onDragOver}
+        onDrop={onDrop}
       >
         <g
           style={{
@@ -488,6 +621,27 @@ export const Canvas = ({
               selectionColor={layerIdsToColorSelection[layerId]}
             />
           ))}
+          {layerIds.length === 0 && viewport.width > 0 && viewport.height > 0 && (
+            <g>
+              <rect
+                x={-camera.x + viewport.width / 2 - 250}
+                y={-camera.y + viewport.height / 2 - 90}
+                width={500}
+                height={180}
+                rx={16}
+                className="fill-white/40 stroke-slate-400 stroke-2"
+                strokeDasharray="10 8"
+              />
+              <text
+                x={-camera.x + viewport.width / 2}
+                y={-camera.y + viewport.height / 2 + 6}
+                textAnchor="middle"
+                className="fill-slate-600 text-xl font-medium"
+              >
+                Drop your problem here or click Add Problem
+              </text>
+            </g>
+          )}
           <SelectionBox
             onResizeHandlePointerDown={onResizeHandlePointerDown}
           />

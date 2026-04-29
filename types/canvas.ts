@@ -15,6 +15,7 @@ export enum LayerType {
   Path,
   Text,
   Note,
+  Image,
 };
 
 export type RectangleLayer = {
@@ -66,6 +67,15 @@ export type NoteLayer = {
   width: number;
   fill: Color;
   value?: string;
+};
+
+export type ImageLayer = {
+  type: LayerType.Image;
+  x: number;
+  y: number;
+  height: number;
+  width: number;
+  src: string;
 };
 
 export type Point = {
@@ -127,4 +137,10 @@ export enum CanvasMode {
   Pencil,
 };
 
-export type Layer = RectangleLayer | EllipseLayer | PathLayer | TextLayer | NoteLayer
+export type Layer =
+  | RectangleLayer
+  | EllipseLayer
+  | PathLayer
+  | TextLayer
+  | NoteLayer
+  | ImageLayer;
