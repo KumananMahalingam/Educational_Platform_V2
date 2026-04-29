@@ -79,8 +79,17 @@ export async function POST(request: Request) {
     }
 
     const parsed = extractJson(rawJson);
+    const cleanLatex = (parsed.latex ?? "")
+    .replace(/\\rule\{[^}]*\}\{[^}]*\}/g, "")
+    .replace(/\\hline/g, "")
+    .replace(/\\\\/g, "")
+    .replace(/\\begin\{[^}]*\}/g, "")
+    .replace(/\\end\{[^}]*\}/g, "")
+    .replace(/\{[^}]*\}/g, "")
+    .replace(/\$/g, "")
+    .trim();
     return NextResponse.json({
-      latex: parsed.latex ?? "",
+      latex: cleanLatex,
       text: parsed.text ?? "",
     });
   } catch (error) {
