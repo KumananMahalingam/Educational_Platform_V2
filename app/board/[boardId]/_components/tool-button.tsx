@@ -27,6 +27,11 @@ export const ToolButton = ({
         onClick={onClick}
         size="icon"
         variant={isActive ? "boardActive" : "board"}
+        className={
+          isActive
+            ? "bg-blue-500/20 text-blue-400 rounded-lg"
+            : "text-white/50 hover:text-white hover:bg-white/10 rounded-lg"
+        }
       >
         <Icon />
       </Button>

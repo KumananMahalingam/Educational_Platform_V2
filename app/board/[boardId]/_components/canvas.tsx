@@ -593,8 +593,18 @@ export const Canvas = ({
 
   return (
     <main
-      className="h-full w-full relative bg-neutral-100 touch-none"
+      className="h-full w-full relative bg-white touch-none"
     >
+      <div
+        className="absolute inset-0 pointer-events-none"
+        style={{
+          backgroundImage: `
+      linear-gradient(to right, oklch(0.75 0 0 / 0.2) 1px, transparent 1px),
+      linear-gradient(to bottom, oklch(0.75 0 0 / 0.2) 1px, transparent 1px)
+    `,
+          backgroundSize: "24px 24px",
+        }}
+      />
       <Info boardId={boardId} />
       <Participants />
       <Toolbar
@@ -642,14 +652,14 @@ export const Canvas = ({
                 width={500}
                 height={180}
                 rx={16}
-                className="fill-white/40 stroke-slate-400 stroke-2"
+                className="fill-white/5 stroke-slate-400 stroke-1"
                 strokeDasharray="10 8"
               />
               <text
                 x={-camera.x + viewport.width / 2}
                 y={-camera.y + viewport.height / 2 + 6}
                 textAnchor="middle"
-                className="fill-slate-600 text-xl font-medium"
+                className="fill-slate-400 text-xl font-medium"
               >
                 Drop your problem here or click Add Problem
               </text>

@@ -25,9 +25,7 @@ const font = Poppins({
 
 const TabSeparator = () => {
   return (
-    <div className="text-neutral-300 px-1.5">
-      |
-    </div>
+    <div className="w-px h-6 bg-white/20" />
   );
 };
 
@@ -43,9 +41,9 @@ export const Info = ({
   if (!data) return <InfoSkeleton />;
 
   return (
-    <div className="absolute top-2 left-2 bg-white rounded-md px-1.5 h-12 flex items-center shadow-md">
+    <div className="absolute top-2 left-2 bg-[#1a1a2e] border border-white/10 rounded-xl shadow-lg flex items-center h-12 px-3 gap-3">
       <Hint label="Go to boards" side="bottom" sideOffset={10}>
-        <Button asChild variant="board" className="px-2">
+        <Button asChild variant="board" className="px-2 text-white/60 hover:text-white hover:bg-white/10">
           <Link href="/">
             <Image
               src="/logo.svg"
@@ -54,7 +52,7 @@ export const Info = ({
               width={40}
             />
             <span className={cn(
-              "font-semibold text-xl ml-2 text-black",
+              "font-bold text-xl ml-2 text-white",
               font.className,
             )}>
               Board
@@ -66,7 +64,7 @@ export const Info = ({
       <Hint label="Edit title" side="bottom" sideOffset={10}>
         <Button
           variant="board"
-          className="text-base font-normal px-2"
+          className="text-base font-medium text-white/80 px-2 hover:bg-white/10 hover:text-white"
           onClick={() => onOpen(data._id, data.title)}
         >
           {data.title}
@@ -81,7 +79,7 @@ export const Info = ({
       >
         <div>
           <Hint label="Main menu" side="bottom" sideOffset={10}>
-            <Button size="icon" variant="board">
+            <Button size="icon" variant="board" className="text-white/60 hover:text-white hover:bg-white/10">
               <Menu />
             </Button>
           </Hint>
@@ -94,7 +92,7 @@ export const Info = ({
 export const InfoSkeleton = () => {
   return (
     <div 
-      className="absolute top-2 left-2 bg-white rounded-md px-1.5 h-12 flex items-center shadow-md w-[300px]"
+      className="absolute top-2 left-2 bg-[#1a1a2e] border border-white/10 rounded-xl px-3 h-12 flex items-center shadow-lg w-[300px]"
     />
   );
 };

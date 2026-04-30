@@ -89,7 +89,7 @@ export const SelectionTools = memo(({
 
   return (
     <div
-      className="absolute p-3 rounded-xl bg-white shadow-sm border flex select-none"
+      className="absolute p-3 rounded-xl bg-neutral-900 border border-white/10 shadow-xl flex select-none"
       style={{
         transform: `translate(
           calc(${x}px - 50%),
@@ -106,6 +106,7 @@ export const SelectionTools = memo(({
             onClick={moveToFront}
             variant="board"
             size="icon"
+            className="text-white/60 hover:text-white hover:bg-white/10 rounded-lg"
           >
             <BringToFront />
           </Button>
@@ -115,17 +116,19 @@ export const SelectionTools = memo(({
             onClick={moveToBack}
             variant="board"
             size="icon"
+            className="text-white/60 hover:text-white hover:bg-white/10 rounded-lg"
           >
             <SendToBack />
           </Button>
         </Hint>
       </div>
-      <div className="flex items-center pl-2 ml-2 border-l border-neutral-200">
+      <div className="flex items-center pl-2 ml-2 border-l border-white/10">
         <Hint label="Delete">
           <Button
             variant="board"
             size="icon"
             onClick={deleteLayers}
+            className="text-white/60 hover:text-red-400 hover:bg-red-500/20 rounded-lg"
           >
             <Trash2 />
           </Button>
