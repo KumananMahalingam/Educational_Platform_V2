@@ -58,22 +58,23 @@ export const Actions = ({
         onClick={(e) => e.stopPropagation()}
         side={side}
         sideOffset={sideOffset}
-        className="w-60"
+        className="bg-neutral-900 border border-white/10 rounded-xl shadow-2xl p-1 min-w-[180px] w-60"
       >
         <DropdownMenuItem
           onClick={onCopyLink}
-          className="p-3 cursor-pointer"
+          className="text-white/80 hover:text-white hover:bg-white/10 rounded-lg px-3 py-2 text-sm flex items-center gap-2.5 cursor-pointer w-full"
         >
-          <Link2 className="h-4 w-4 mr-2" />
+          <Link2 className="text-white/40 h-4 w-4" />
           Copy board link
         </DropdownMenuItem>
         <DropdownMenuItem
           onClick={() => onOpen(id, title)}
-          className="p-3 cursor-pointer"
+          className="text-white/80 hover:text-white hover:bg-white/10 rounded-lg px-3 py-2 text-sm flex items-center gap-2.5 cursor-pointer w-full"
         >
-          <Pencil className="h-4 w-4 mr-2" />
+          <Pencil className="text-white/40 h-4 w-4" />
           Rename
         </DropdownMenuItem>
+        <DropdownMenuSeparator className="bg-white/10" />
         <ConfirmModal
           header="Delete board?"
           description="This will delete the board and all of its contents."
@@ -82,9 +83,9 @@ export const Actions = ({
         >
           <Button
             variant="ghost"
-            className="p-3 cursor-pointer text-sm w-full justify-start font-normal"
+            className="text-red-400/80 hover:text-red-400 hover:bg-red-500/10 rounded-lg px-3 py-2 text-sm flex items-center gap-2.5 cursor-pointer w-full justify-start font-normal"
           >
-            <Trash2 className="h-4 w-4 mr-2" />
+            <Trash2 className="text-white/40 h-4 w-4" />
             Delete
           </Button>
         </ConfirmModal>

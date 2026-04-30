@@ -21,7 +21,7 @@ export const UserAvatar = ({
   return (
     <Hint label={name || "Teammate"} side="bottom" sideOffset={18}>
       <Avatar
-        className="h-8 w-8 border-2"
+        className="h-8 w-8 border-2 ring-2 ring-neutral-900"
         style={{ borderColor }}
       >
         <AvatarImage src={src} />
