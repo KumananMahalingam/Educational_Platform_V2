@@ -100,6 +100,22 @@ export const HandwritingOverlay = ({
     };
   }, [activeProblemSrc]);
 
+  // --- Rate-limit-aware scheduling ---------------------------------------
+  // Gemini free tier = 20 req/min, so we throttle aggressively:
+  //   * 2000ms debounce after a stroke ends (coalesces bursts of strokes)
+  //   * 5000ms minimum gap between successful API calls (~12 RPM)
+  //   * On a 429 we honour Gemini's retry-after hint
+  //   * Only ever one request in flight at a time
+  const DEBOUNCE_MS = 2000;
+  const MIN_INTERVAL_MS = 5000;
+
+  const inFlightRef = useRef(false);
+  const nextAllowedAtRef = useRef(0);
+  const pendingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cooldownDisplayTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  );
+
   useEffect(() => {
     if (onStrokeEnd == null || onStrokeEnd <= 0) {
       return;
@@ -107,7 +123,23 @@ export const HandwritingOverlay = ({
 
     let cancelled = false;
 
-    const timer = setTimeout(async () => {
+    const runRecognition = async () => {
+      if (cancelled) return;
+      if (inFlightRef.current) {
+        // A request is already running — when it finishes, the latest
+        // strokeEndTick will retrigger this effect and we'll try again.
+        return;
+      }
+
+      const now = Date.now();
+      const wait = Math.max(0, nextAllowedAtRef.current - now);
+      if (wait > 0) {
+        // Still cooling down. Reschedule for exactly when we're allowed.
+        if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
+        pendingTimerRef.current = setTimeout(runRecognition, wait);
+        return;
+      }
+
       const imageBase64 = await captureCanvas();
       if (cancelled) return;
       if (!imageBase64) {
@@ -120,6 +152,8 @@ export const HandwritingOverlay = ({
       );
       setDebugImage(`data:image/png;base64,${imageBase64}`);
 
+      inFlightRef.current = true;
+      nextAllowedAtRef.current = Date.now() + MIN_INTERVAL_MS;
       pushState({ ...stateRef.current, isLoading: true });
 
       try {
@@ -128,6 +162,32 @@ export const HandwritingOverlay = ({
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ imageBase64, problem: problemText }),
         });
+
+        if (response.status === 429) {
+          const data = (await response.json().catch(() => ({}))) as {
+            retryAfterSeconds?: number;
+          };
+          const retrySec = Math.max(1, data.retryAfterSeconds ?? 30);
+          nextAllowedAtRef.current = Date.now() + retrySec * 1000;
+          console.warn(`[handwriting] rate limited, retry in ${retrySec}s`);
+          if (cancelled) return;
+
+          pushState({
+            ...stateRef.current,
+            isLoading: false,
+            feedback: `Rate limited — retrying in ${retrySec}s.`,
+          });
+
+          // Once the cooldown is up, automatically retry with whatever's on
+          // the canvas now.
+          if (cooldownDisplayTimerRef.current) {
+            clearTimeout(cooldownDisplayTimerRef.current);
+          }
+          cooldownDisplayTimerRef.current = setTimeout(() => {
+            if (!cancelled) runRecognition();
+          }, retrySec * 1000);
+          return;
+        }
 
         if (!response.ok) {
           throw new Error(`Recognition failed: ${response.status}`);
@@ -144,7 +204,8 @@ export const HandwritingOverlay = ({
         if (cancelled) return;
 
         const nextPercentage =
-          typeof data.percentage === "number" && Number.isFinite(data.percentage)
+          typeof data.percentage === "number" &&
+          Number.isFinite(data.percentage)
             ? Math.max(0, Math.min(100, data.percentage))
             : stateRef.current.percentage;
 
@@ -166,14 +227,31 @@ export const HandwritingOverlay = ({
           isLoading: false,
           feedback: "Could not analyse handwriting. Try again.",
         });
+      } finally {
+        inFlightRef.current = false;
       }
-    }, 1500);
+    };
+
+    if (pendingTimerRef.current) clearTimeout(pendingTimerRef.current);
+    pendingTimerRef.current = setTimeout(runRecognition, DEBOUNCE_MS);
 
     return () => {
       cancelled = true;
-      clearTimeout(timer);
+      if (pendingTimerRef.current) {
+        clearTimeout(pendingTimerRef.current);
+        pendingTimerRef.current = null;
+      }
     };
   }, [onStrokeEnd, problemText]);
+
+  // Clean up the cooldown auto-retry timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (cooldownDisplayTimerRef.current) {
+        clearTimeout(cooldownDisplayTimerRef.current);
+      }
+    };
+  }, []);
 
   const showProgress = useMemo(
     () => state.isLoading || state.percentage > 0,
