@@ -17,6 +17,17 @@ const parseJson = (raw: string) => {
       .replace(/^```\s*/i, "")
       .replace(/\s*```$/, "")
       .trim();
+
+    // Try to find a JSON object inside the text (handles models that wrap
+    // JSON in prose).
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]) as typeof FALLBACK;
+      } catch {
+        // fall through
+      }
+    }
     return JSON.parse(cleaned) as typeof FALLBACK;
   }
 };
@@ -29,13 +40,19 @@ export async function POST(request: Request) {
     };
 
     if (!imageBase64) {
+      console.warn("[recognize-math] missing imageBase64");
       return NextResponse.json(FALLBACK);
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
+      console.warn("[recognize-math] missing GEMINI_API_KEY");
       return NextResponse.json(FALLBACK);
     }
+
+    console.log(
+      `[recognize-math] calling gemini, image bytes=${imageBase64.length}, problem="${problem?.slice(0, 80) ?? ""}"`
+    );
 
     const response = await fetch(
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${apiKey}`,
@@ -53,20 +70,34 @@ export async function POST(request: Request) {
                   },
                 },
                 {
-                  text: `You are a math teacher reviewing a student's handwritten working.
-You will be given an image of a whiteboard with a math problem at the top and the student's handwritten working below.
-Respond ONLY with a JSON object in this exact format, no markdown, no explanation:
-{
-  "latex": "the student's latest handwritten expression as LaTeX",
-  "isCorrect": true or false,
-  "percentage": 0-100,
-  "feedback": "one sentence of feedback"
-}
-percentage should represent how close the student is to the final answer:
-0 = nothing written, 33 = first step correct, 66 = halfway, 100 = correct final answer.
-isCorrect should be true if the latest step is mathematically valid.
+                  text: `You are a math teacher reviewing a student's handwritten working on a digital whiteboard.
 
-Problem context: ${problem || ""}`,
+The image is a screenshot of the whiteboard. Anywhere on it you may see:
+- A printed math problem (image of the problem).
+- The student's handwritten ink strokes (the working out).
+
+Even if the handwriting is messy, partial, or only one or two scribbles, ALWAYS produce your best guess. Never refuse. Never say you cannot see anything. If you truly see no handwriting at all, return percentage 0 with feedback "Start writing your working".
+
+Respond ONLY with a JSON object in this exact shape, no markdown fences, no commentary, no preamble:
+{
+  "latex": "the student's latest handwritten expression as LaTeX (best guess)",
+  "isCorrect": true | false,
+  "percentage": <integer 0-100>,
+  "feedback": "one short, encouraging sentence of feedback for the student"
+}
+
+Guidance for percentage:
+- 0  = nothing meaningful written yet
+- 25 = first useful step is on the page
+- 50 = halfway through the working
+- 75 = nearly at the answer
+- 100 = correct final answer is written
+
+Guidance for isCorrect:
+- true  if the latest visible step is mathematically valid
+- false if the latest visible step contains an error
+
+Problem context: ${problem || "(unknown — infer from the image)"}.`,
                 },
               ],
             },
@@ -76,6 +107,10 @@ Problem context: ${problem || ""}`,
     );
 
     if (!response.ok) {
+      const body = await response.text();
+      console.error(
+        `[recognize-math] gemini ${response.status}: ${body.slice(0, 500)}`
+      );
       return NextResponse.json(FALLBACK);
     }
 
@@ -83,20 +118,32 @@ Problem context: ${problem || ""}`,
       candidates?: Array<{ content?: { parts?: Array<{ text?: string }> } }>;
     };
     const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
+    console.log("[recognize-math] gemini raw text:", text);
+
     if (!text) {
       return NextResponse.json(FALLBACK);
     }
 
-    const parsed = parseJson(text);
-    return NextResponse.json({
+    let parsed: typeof FALLBACK;
+    try {
+      parsed = parseJson(text);
+    } catch (e) {
+      console.error("[recognize-math] could not parse gemini response", e);
+      return NextResponse.json(FALLBACK);
+    }
+
+    const result = {
       latex: parsed.latex || "",
       isCorrect: typeof parsed.isCorrect === "boolean" ? parsed.isCorrect : true,
-      percentage: Number.isFinite(Number(parsed.percentage)) 
-        ? Math.max(0, Math.min(100, Number(parsed.percentage))) 
+      percentage: Number.isFinite(Number(parsed.percentage))
+        ? Math.max(0, Math.min(100, Number(parsed.percentage)))
         : 0,
       feedback: parsed.feedback || "",
-    });
-  } catch {
+    };
+    console.log("[recognize-math] returning", result);
+    return NextResponse.json(result);
+  } catch (e) {
+    console.error("[recognize-math] unhandled error", e);
     return NextResponse.json(FALLBACK);
   }
 }
