@@ -1,7 +1,7 @@
 "use client";
 
 import { nanoid } from "nanoid";
-import { useCallback, useMemo, useState, useEffect } from "react";
+import { useCallback, useMemo, useState, useEffect, useRef } from "react";
 import { LiveObject } from "@liveblocks/client";
 
 import { 
@@ -43,6 +43,7 @@ import { SelectionBox } from "./selection-box";
 import { SelectionTools } from "./selection-tools";
 import { CursorsPresence } from "./cursors-presence";
 import { ProblemPanel } from "./problem-panel";
+import { HandwritingOverlay } from "./handwriting-overlay";
 
 const MAX_LAYERS = 100;
 const DEFAULT_IMAGE_WIDTH = 400;
@@ -68,6 +69,22 @@ export const Canvas = ({
     b: 0,
   });
   const [viewport, setViewport] = useState({ width: 0, height: 0 });
+  const [strokeEndTick, setStrokeEndTick] = useState(0);
+  const [verification, setVerification] = useState({
+    isLoading: false,
+    isCorrect: true,
+    percentage: 0,
+    feedback: "Start writing with the pen tool to verify steps in real time.",
+  });
+
+  const onProgressChange = useCallback((state: {
+      isLoading: boolean;
+      isCorrect: boolean;
+      percentage: number;
+      feedback: string;
+  }) => {
+      setVerification(state);
+  }, []);
 
  
 
@@ -475,6 +492,10 @@ export const Canvas = ({
       });
     } else if (canvasState.mode === CanvasMode.Pencil) {
       insertPath();
+      setStrokeEndTick((t) => {
+          console.log("Stroke ended, tick:", t + 1);
+          return t + 1;
+      });
     } else if (canvasState.mode === CanvasMode.Inserting) {
       insertLayer(canvasState.layerType, point);
     } else {
@@ -494,6 +515,13 @@ export const Canvas = ({
     unselectLayers,
     insertPath
   ]);
+
+const handlePointerUp = useCallback((e: React.PointerEvent) => {
+      if (canvasState.mode === CanvasMode.Pencil) {
+          setStrokeEndTick((t) => t + 1);
+      }
+      onPointerUp(e);
+  }, [canvasState.mode, onPointerUp]);
 
   const selections = useOthersMapped((other) => other.presence.selection);
 
@@ -618,14 +646,20 @@ export const Canvas = ({
         camera={camera}
         setLastUsedColor={setLastUsedColor}
       />
-      <ProblemPanel activeProblemSrc={activeProblemSrc} />
+      <ProblemPanel
+        activeProblemSrc={activeProblemSrc}
+        verificationPercentage={verification.percentage}
+        verificationIsCorrect={verification.isCorrect}
+        verificationFeedback={verification.feedback}
+        verificationIsLoading={verification.isLoading}
+      />
       <svg
         className="h-[100vh] w-[100vw]"
         onWheel={onWheel}
         onPointerMove={onPointerMove}
         onPointerLeave={onPointerLeave}
         onPointerDown={onPointerDown}
-        onPointerUp={onPointerUp}
+        onPointerUp={handlePointerUp}
         onDragOver={onDragOver}
         onDrop={onDrop}
       >
@@ -686,6 +720,12 @@ export const Canvas = ({
           )}
         </g>
       </svg>
+      <HandwritingOverlay
+        activeProblemSrc={activeProblemSrc}
+        canvasState={canvasState}
+        onProgressChange={onProgressChange}
+        onStrokeEnd={strokeEndTick}
+      />
     </main>
   );
 };

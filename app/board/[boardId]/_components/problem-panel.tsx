@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { ProgressBar } from "./progress-bar";
 
 type ProblemAnalysis = {
   topic: string;
@@ -36,9 +37,13 @@ type ProblemAnalysis = {
 
 interface ProblemPanelProps {
   activeProblemSrc: string | null;
+  verificationPercentage: number;
+  verificationIsCorrect: boolean;
+  verificationFeedback: string;
+  verificationIsLoading: boolean;
 }
 
-export const ProblemPanel = ({ activeProblemSrc }: ProblemPanelProps) => {
+export const ProblemPanel = ({ activeProblemSrc, verificationPercentage, verificationIsCorrect, verificationFeedback, verificationIsLoading }: ProblemPanelProps) => {
   const [collapsed, setCollapsed] = useState(false);
   const [hintsExpanded, setHintsExpanded] = useState(true);
   const [isLoading, setIsLoading] = useState(false);
@@ -159,6 +164,16 @@ export const ProblemPanel = ({ activeProblemSrc }: ProblemPanelProps) => {
                 </div>
               </div>
             </div>
+
+            <section className="p-5 border-b border-white/10">
+                <ProgressBar
+                    percentage={verificationPercentage}
+                    isCorrect={verificationIsCorrect}
+                    feedback={verificationFeedback}
+                    isLoading={verificationIsLoading}
+                />
+            </section>
+
 
             <section className="p-5 border-b border-white/10">
               <div className="flex items-center gap-2 mb-3">
