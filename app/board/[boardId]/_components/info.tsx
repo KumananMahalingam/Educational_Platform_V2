@@ -13,6 +13,7 @@ import { Actions } from "@/components/actions";
 import { Button } from "@/components/ui/button";
 import { Id } from "@/convex/_generated/dataModel";
 import { useRenameModal } from "@/store/use-rename-modal";
+import { Participants } from "./participants";
 
 interface InfoProps {
   boardId: string;
@@ -85,6 +86,8 @@ export const Info = ({
           </Hint>
         </div>
       </Actions>
+      <TabSeparator />
+      <Participants />
     </div>
   );
 };

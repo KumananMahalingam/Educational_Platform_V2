@@ -38,7 +38,6 @@ import { useDeleteLayers } from "@/hooks/use-delete-layers";
 import { Info } from "./info";
 import { Path } from "./path";
 import { Toolbar } from "./toolbar";
-import { Participants } from "./participants";
 import { LayerPreview } from "./layer-preview";
 import { SelectionBox } from "./selection-box";
 import { SelectionTools } from "./selection-tools";
@@ -606,7 +605,6 @@ export const Canvas = ({
         }}
       />
       <Info boardId={boardId} />
-      <Participants />
       <Toolbar
         canvasState={canvasState}
         setCanvasState={setCanvasState}
