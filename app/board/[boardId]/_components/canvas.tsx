@@ -12,6 +12,7 @@ import {
   useStorage,
   useOthersMapped,
   useSelf,
+  useUpdateMyPresence,
 } from "@liveblocks/react/suspense";
 import { 
   colorToCss,
@@ -28,6 +29,8 @@ import {
   Color,
   Layer,
   LayerType,
+  MAX_ZOOM,
+  MIN_ZOOM,
   Point,
   Side,
   XYWH,
@@ -48,6 +51,7 @@ import {
   type CanvasStepMarker,
 } from "./handwriting-overlay";
 import { StepMarkers } from "./step-markers";
+import { ZoomControls } from "./zoom-controls";
 
 // High enough to be effectively unlimited for handwriting — each pen stroke
 // becomes a Path layer, and a single line of math working can easily contain
@@ -69,7 +73,24 @@ export const Canvas = ({
   const [canvasState, setCanvasState] = useState<CanvasState>({
     mode: CanvasMode.None,
   });
-  const [camera, setCamera] = useState<Camera>({ x: 0, y: 0 });
+  const [camera, setCamera] = useState<Camera>({ x: 0, y: 0, zoom: 1 });
+  const svgRef = useRef<SVGSVGElement | null>(null);
+  const cameraRef = useRef(camera);
+  useEffect(() => {
+    cameraRef.current = camera;
+  }, [camera]);
+
+  // Tracks active touches/pointers for two-finger pinch gestures.
+  const activePointersRef = useRef<Map<number, { x: number; y: number }>>(
+    new Map()
+  );
+  const pinchStartRef = useRef<{
+    distance: number;
+    midpoint: { x: number; y: number };
+    cameraStart: Camera;
+  } | null>(null);
+  const isPinchingRef = useRef(false);
+  const updateMyPresence = useUpdateMyPresence();
   const [lastUsedColor, setLastUsedColor] = useState<Color>({
     r: 0,
     g: 0,
@@ -253,16 +274,18 @@ export const Canvas = ({
       }
 
       const height = (DEFAULT_IMAGE_WIDTH / size.width) * size.height;
+      // Drop the image at the canvas-space point under the centre of the
+      // viewport, accounting for both pan AND zoom.
       const center = {
-        x: -camera.x + viewport.width / 2 - DEFAULT_IMAGE_WIDTH / 2,
-        y: -camera.y + viewport.height / 2 - height / 2,
+        x: (viewport.width / 2 - camera.x) / camera.zoom - DEFAULT_IMAGE_WIDTH / 2,
+        y: (viewport.height / 2 - camera.y) / camera.zoom - height / 2,
       };
 
       insertImageLayer(center, src, DEFAULT_IMAGE_WIDTH, height);
     } catch {
       // Ignore failed image uploads for now.
     }
-  }, [camera.x, camera.y, insertImageLayer, loadImageSize, uploadImageFile, viewport.height, viewport.width]);
+  }, [camera.x, camera.y, camera.zoom, insertImageLayer, loadImageSize, uploadImageFile, viewport.height, viewport.width]);
 
   const translateSelectedLayers = useMutation((
     { storage, self },
@@ -443,17 +466,175 @@ export const Canvas = ({
     });
   }, [history]);
 
-  const onWheel = useCallback((e: React.WheelEvent) => {
-    setCamera((camera) => ({
-      x: camera.x - e.deltaX,
-      y: camera.y - e.deltaY,
-    }));
+  // --- Zoom helpers ------------------------------------------------------
+  // Zoom anchored at a screen point: the canvas point under (sx, sy) stays
+  // visually under (sx, sy) after the zoom level changes.
+  const zoomCameraAt = useCallback((nextZoom: number, sx: number, sy: number) => {
+    setCamera((prev) => {
+      const clamped = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, nextZoom));
+      const ratio = clamped / prev.zoom;
+      return {
+        zoom: clamped,
+        x: sx - (sx - prev.x) * ratio,
+        y: sy - (sy - prev.y) * ratio,
+      };
+    });
   }, []);
+
+  const zoomBy = useCallback((factor: number, sx?: number, sy?: number) => {
+    const cx = sx ?? window.innerWidth / 2;
+    const cy = sy ?? window.innerHeight / 2;
+    setCamera((prev) => {
+      const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev.zoom * factor));
+      const ratio = next / prev.zoom;
+      return {
+        zoom: next,
+        x: cx - (cx - prev.x) * ratio,
+        y: cy - (cy - prev.y) * ratio,
+      };
+    });
+  }, []);
+
+  const zoomIn = useCallback(() => zoomBy(1.2), [zoomBy]);
+  const zoomOut = useCallback(() => zoomBy(1 / 1.2), [zoomBy]);
+  const resetZoom = useCallback(() => {
+    setCamera({ x: 0, y: 0, zoom: 1 });
+  }, []);
+
+  // Native wheel listener so we can preventDefault on ctrl/⌘+wheel pinch
+  // zoom (React's synthetic wheel is passive and can't preventDefault).
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    const onNativeWheel = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        // Trackpad pinch sends small deltaY values with ctrlKey=true.
+        // Convert that to a smooth multiplicative factor.
+        const factor = Math.exp(-e.deltaY * 0.01);
+        setCamera((prev) => {
+          const next = Math.max(
+            MIN_ZOOM,
+            Math.min(MAX_ZOOM, prev.zoom * factor)
+          );
+          const ratio = next / prev.zoom;
+          return {
+            zoom: next,
+            x: e.clientX - (e.clientX - prev.x) * ratio,
+            y: e.clientY - (e.clientY - prev.y) * ratio,
+          };
+        });
+      } else {
+        setCamera((prev) => ({
+          ...prev,
+          x: prev.x - e.deltaX,
+          y: prev.y - e.deltaY,
+        }));
+      }
+    };
+
+    svg.addEventListener("wheel", onNativeWheel, { passive: false });
+    return () => svg.removeEventListener("wheel", onNativeWheel);
+  }, []);
+
+  // Two-finger pinch zoom on touchscreens. Native capture-phase listeners
+  // so we can intercept gestures even when an inner layer would otherwise
+  // call stopPropagation on its synthetic events.
+  useEffect(() => {
+    const svg = svgRef.current;
+    if (!svg) return;
+
+    const onPointerDownNative = (e: PointerEvent) => {
+      activePointersRef.current.set(e.pointerId, {
+        x: e.clientX,
+        y: e.clientY,
+      });
+
+      if (activePointersRef.current.size === 2) {
+        const pts = Array.from(activePointersRef.current.values());
+        const dx = pts[0].x - pts[1].x;
+        const dy = pts[0].y - pts[1].y;
+        pinchStartRef.current = {
+          distance: Math.hypot(dx, dy),
+          midpoint: {
+            x: (pts[0].x + pts[1].x) / 2,
+            y: (pts[0].y + pts[1].y) / 2,
+          },
+          cameraStart: { ...cameraRef.current },
+        };
+        isPinchingRef.current = true;
+        // Drop any in-progress pencil stroke so a giant connecting line
+        // doesn't appear when the pinch ends.
+        updateMyPresence({ pencilDraft: null });
+        e.stopPropagation();
+        e.preventDefault();
+      }
+    };
+
+    const onPointerMoveNative = (e: PointerEvent) => {
+      if (!activePointersRef.current.has(e.pointerId)) return;
+      activePointersRef.current.set(e.pointerId, {
+        x: e.clientX,
+        y: e.clientY,
+      });
+
+      if (
+        activePointersRef.current.size >= 2 &&
+        pinchStartRef.current &&
+        isPinchingRef.current
+      ) {
+        e.stopPropagation();
+        e.preventDefault();
+        const pts = Array.from(activePointersRef.current.values());
+        const dx = pts[0].x - pts[1].x;
+        const dy = pts[0].y - pts[1].y;
+        const newDist = Math.hypot(dx, dy);
+        if (newDist === 0) return;
+
+        const start = pinchStartRef.current;
+        const factor = newDist / start.distance;
+        const newZoom = Math.max(
+          MIN_ZOOM,
+          Math.min(MAX_ZOOM, start.cameraStart.zoom * factor)
+        );
+        const ratio = newZoom / start.cameraStart.zoom;
+        setCamera({
+          zoom: newZoom,
+          x: start.midpoint.x - (start.midpoint.x - start.cameraStart.x) * ratio,
+          y: start.midpoint.y - (start.midpoint.y - start.cameraStart.y) * ratio,
+        });
+      }
+    };
+
+    const onPointerUpNative = (e: PointerEvent) => {
+      activePointersRef.current.delete(e.pointerId);
+      if (activePointersRef.current.size < 2) {
+        pinchStartRef.current = null;
+      }
+      if (activePointersRef.current.size === 0) {
+        isPinchingRef.current = false;
+      }
+    };
+
+    svg.addEventListener("pointerdown", onPointerDownNative, { capture: true });
+    svg.addEventListener("pointermove", onPointerMoveNative, { capture: true });
+    svg.addEventListener("pointerup", onPointerUpNative, { capture: true });
+    svg.addEventListener("pointercancel", onPointerUpNative, { capture: true });
+
+    return () => {
+      svg.removeEventListener("pointerdown", onPointerDownNative, true);
+      svg.removeEventListener("pointermove", onPointerMoveNative, true);
+      svg.removeEventListener("pointerup", onPointerUpNative, true);
+      svg.removeEventListener("pointercancel", onPointerUpNative, true);
+    };
+  }, [updateMyPresence]);
 
   const onPointerMove = useMutation((
     { setMyPresence }, 
     e: React.PointerEvent
   ) => {
+    if (isPinchingRef.current) return;
     e.preventDefault();
 
     const current = pointerEventToCanvasPoint(e, camera);
@@ -507,18 +688,19 @@ export const Canvas = ({
       });
 
       const point = {
-        x: Math.round(e.clientX) - camera.x,
-        y: Math.round(e.clientY) - camera.y,
+        x: (Math.round(e.clientX) - camera.x) / camera.zoom,
+        y: (Math.round(e.clientY) - camera.y) / camera.zoom,
       };
       await createImageLayerAtPoint(src, point);
     } catch {
       // Ignore invalid dropped files.
     }
-  }, [camera.x, camera.y, createImageLayerAtPoint]);
+  }, [camera.x, camera.y, camera.zoom, createImageLayerAtPoint]);
 
   const onPointerDown = useCallback((
     e: React.PointerEvent,
   ) => {
+    if (isPinchingRef.current) return;
     const point = pointerEventToCanvasPoint(e, camera);
 
     if (canvasState.mode === CanvasMode.Inserting) {
@@ -716,9 +898,15 @@ const handlePointerUp = useCallback((e: React.PointerEvent) => {
         verificationFeedback={verification.feedback}
         verificationIsLoading={verification.isLoading}
       />
+      <ZoomControls
+        zoom={camera.zoom}
+        onZoomIn={zoomIn}
+        onZoomOut={zoomOut}
+        onResetZoom={resetZoom}
+      />
       <svg
+        ref={svgRef}
         className="h-[100vh] w-[100vw]"
-        onWheel={onWheel}
         onPointerMove={onPointerMove}
         onPointerLeave={onPointerLeave}
         onPointerDown={onPointerDown}
@@ -728,7 +916,8 @@ const handlePointerUp = useCallback((e: React.PointerEvent) => {
       >
         <g
           style={{
-            transform: `translate(${camera.x}px, ${camera.y}px)`
+            transform: `translate(${camera.x}px, ${camera.y}px) scale(${camera.zoom})`,
+            transformOrigin: "0 0",
           }}
         >
           {layerIds.map((layerId) => (
@@ -739,27 +928,33 @@ const handlePointerUp = useCallback((e: React.PointerEvent) => {
               selectionColor={layerIdsToColorSelection[layerId]}
             />
           ))}
-          {layerIds.length === 0 && viewport.width > 0 && viewport.height > 0 && (
-            <g>
-              <rect
-                x={-camera.x + viewport.width / 2 - 250}
-                y={-camera.y + viewport.height / 2 - 90}
-                width={500}
-                height={180}
-                rx={16}
-                className="fill-white/5 stroke-slate-400 stroke-1"
-                strokeDasharray="10 8"
-              />
-              <text
-                x={-camera.x + viewport.width / 2}
-                y={-camera.y + viewport.height / 2 + 6}
-                textAnchor="middle"
-                className="fill-slate-400 text-xl font-medium"
-              >
-                Drop your problem here or click Add Problem
-              </text>
-            </g>
-          )}
+          {layerIds.length === 0 && viewport.width > 0 && viewport.height > 0 && (() => {
+            // Centre the hint on the viewport in canvas coords, accounting
+            // for both pan and zoom.
+            const cx = (viewport.width / 2 - camera.x) / camera.zoom;
+            const cy = (viewport.height / 2 - camera.y) / camera.zoom;
+            return (
+              <g>
+                <rect
+                  x={cx - 250}
+                  y={cy - 90}
+                  width={500}
+                  height={180}
+                  rx={16}
+                  className="fill-white/5 stroke-slate-400 stroke-1"
+                  strokeDasharray="10 8"
+                />
+                <text
+                  x={cx}
+                  y={cy + 6}
+                  textAnchor="middle"
+                  className="fill-slate-400 text-xl font-medium"
+                >
+                  Drop your problem here or click Add Problem
+                </text>
+              </g>
+            );
+          })()}
           <SelectionBox
             onResizeHandlePointerDown={onResizeHandlePointerDown}
           />

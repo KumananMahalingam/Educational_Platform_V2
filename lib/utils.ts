@@ -32,9 +32,10 @@ export function pointerEventToCanvasPoint(
   e: React.PointerEvent,
   camera: Camera,
 ) {
+  const zoom = camera.zoom || 1;
   return {
-    x: Math.round(e.clientX) - camera.x,
-    y: Math.round(e.clientY) - camera.y,
+    x: (Math.round(e.clientX) - camera.x) / zoom,
+    y: (Math.round(e.clientY) - camera.y) / zoom,
   };
 };
 

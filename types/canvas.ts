@@ -7,7 +7,11 @@ export type Color = {
 export type Camera = {
   x: number;
   y: number;
+  zoom: number;
 };
+
+export const MIN_ZOOM = 0.2;
+export const MAX_ZOOM = 4;
 
 export enum LayerType {
   Rectangle,

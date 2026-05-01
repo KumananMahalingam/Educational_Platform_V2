@@ -44,7 +44,7 @@ export const Note = ({
   ) => {
     const liveLayers = storage.get("layers");
 
-    liveLayers.get(id)?.set("value", newValue);
+    liveLayers.get(id)?.set("value" as any, newValue);
   }, []);
 
   const handleContentChange = (e: ContentEditableEvent) => {

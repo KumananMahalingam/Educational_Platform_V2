@@ -12,6 +12,7 @@ export {
   useOther,
   useOthersMapped,
   useOthersConnectionIds,
+  useUpdateMyPresence,
 } from "@liveblocks/react/suspense";
 
 declare global {
