@@ -1,15 +1,32 @@
 import { NextResponse } from "next/server";
 
-const FALLBACK = {
+interface StepResult {
+  label: string;
+  x: number;
+  y: number;
+  isCorrect: boolean;
+  issue: string;
+}
+
+interface RecognizeResult {
+  latex: string;
+  isCorrect: boolean;
+  percentage: number;
+  feedback: string;
+  steps: StepResult[];
+}
+
+const FALLBACK: RecognizeResult = {
   latex: "",
   isCorrect: true,
   percentage: 0,
   feedback: "",
+  steps: [],
 };
 
-const parseJson = (raw: string) => {
+const parseJson = (raw: string): unknown => {
   try {
-    return JSON.parse(raw) as typeof FALLBACK;
+    return JSON.parse(raw);
   } catch {
     const cleaned = raw
       .trim()
@@ -18,34 +35,68 @@ const parseJson = (raw: string) => {
       .replace(/\s*```$/, "")
       .trim();
 
-    // Some models wrap JSON in prose — pull the first {...} object out.
     const match = cleaned.match(/\{[\s\S]*\}/);
     if (match) {
       try {
-        return JSON.parse(match[0]) as typeof FALLBACK;
+        return JSON.parse(match[0]);
       } catch {
         // fall through
       }
     }
-    return JSON.parse(cleaned) as typeof FALLBACK;
+    return JSON.parse(cleaned);
   }
+};
+
+const normaliseSteps = (raw: unknown): StepResult[] => {
+  if (!Array.isArray(raw)) return [];
+  const result: StepResult[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const s = item as Record<string, unknown>;
+    const yNum = Number(s.y);
+    if (!Number.isFinite(yNum)) continue;
+    const xNum = Number(s.x);
+    result.push({
+      label: typeof s.label === "string" ? s.label : "",
+      x: Number.isFinite(xNum) ? Math.max(0, Math.min(1, xNum)) : 0.05,
+      y: Math.max(0, Math.min(1, yNum)),
+      isCorrect: typeof s.isCorrect === "boolean" ? s.isCorrect : true,
+      issue: typeof s.issue === "string" ? s.issue : "",
+    });
+  }
+  return result;
 };
 
 const SYSTEM_PROMPT = `You are a math teacher reviewing a student's handwritten working on a digital whiteboard.
 
-The image is a screenshot of the whiteboard. Anywhere on it you may see:
-- A printed math problem (image of the problem).
-- The student's handwritten ink strokes (the working out).
+The image shows the math problem (printed) and the student's handwritten ink strokes (their working out, top to bottom).
 
-Even if the handwriting is messy, partial, or only one or two scribbles, ALWAYS produce your best guess. Never refuse. Never say you cannot see anything. If you truly see no handwriting at all, return percentage 0 with feedback "Start writing your working".
+Your job: identify each distinct STEP the student has written (each separate line of working / each equation) and evaluate it.
 
-Respond ONLY with a JSON object in this exact shape, no markdown fences, no commentary, no preamble:
+Respond ONLY with a JSON object in this exact shape (no markdown fences, no preamble, no commentary):
 {
-  "latex": "the student's latest handwritten expression as LaTeX (best guess)",
+  "latex": "the student's most recent step as LaTeX (best guess)",
   "isCorrect": true or false,
-  "percentage": integer 0-100,
-  "feedback": "one short, encouraging sentence of feedback for the student"
+  "percentage": integer 0-100 reflecting overall progress,
+  "feedback": "one short, encouraging sentence of overall feedback",
+  "steps": [
+    {
+      "label": "concise text of this step (e.g. '3x + 5 = 14')",
+      "x": number from 0.0 to 1.0,
+      "y": number from 0.0 to 1.0,
+      "isCorrect": true or false,
+      "issue": "if incorrect: one short sentence explaining the error. If correct: empty string."
+    }
+  ]
 }
+
+Rules for the "steps" array:
+- One entry per distinct line of HANDWRITTEN working. Do NOT include the printed problem itself as a step.
+- Order entries top-to-bottom.
+- "x" is the approximate horizontal position of the END of that line (right side), as a fraction of the image width (0.0 = left edge, 1.0 = right edge).
+- "y" is the approximate vertical center of that line, as a fraction of the image height (0.0 = top, 1.0 = bottom).
+- "isCorrect" reflects whether this specific step is mathematically valid given the previous steps.
+- If the student has written nothing handwritten, return an empty steps array.
 
 Guidance for percentage:
 - 0  = nothing meaningful written yet
@@ -54,9 +105,7 @@ Guidance for percentage:
 - 75 = nearly at the answer
 - 100 = correct final answer is written
 
-Guidance for isCorrect:
-- true  if the latest visible step is mathematically valid
-- false if the latest visible step contains an error`;
+Even if the handwriting is messy or partial, ALWAYS produce your best guess. Never refuse.`;
 
 export async function POST(request: Request) {
   try {
@@ -91,7 +140,7 @@ export async function POST(request: Request) {
         body: JSON.stringify({
           model: "meta-llama/llama-4-scout-17b-16e-instruct",
           temperature: 0.2,
-          max_tokens: 512,
+          max_tokens: 1024,
           response_format: { type: "json_object" },
           messages: [
             {
@@ -123,8 +172,6 @@ export async function POST(request: Request) {
       );
 
       if (response.status === 429) {
-        // Groq returns Retry-After in seconds and sometimes also a "try again
-        // in X.Xs" hint in the error body.
         const headerRetry = response.headers.get("retry-after");
         const bodyMatch = body.match(/try again in ([\d.]+)s/i);
         const retryAfterSeconds = headerRetry
@@ -151,23 +198,27 @@ export async function POST(request: Request) {
       return NextResponse.json(FALLBACK);
     }
 
-    let parsed: typeof FALLBACK;
+    let parsed: Record<string, unknown>;
     try {
-      parsed = parseJson(text);
+      parsed = parseJson(text) as Record<string, unknown>;
     } catch (e) {
       console.error("[recognize-math] could not parse groq response", e);
       return NextResponse.json(FALLBACK);
     }
 
-    const result = {
-      latex: parsed.latex || "",
-      isCorrect: typeof parsed.isCorrect === "boolean" ? parsed.isCorrect : true,
+    const result: RecognizeResult = {
+      latex: typeof parsed.latex === "string" ? parsed.latex : "",
+      isCorrect:
+        typeof parsed.isCorrect === "boolean" ? parsed.isCorrect : true,
       percentage: Number.isFinite(Number(parsed.percentage))
         ? Math.max(0, Math.min(100, Number(parsed.percentage)))
         : 0,
-      feedback: parsed.feedback || "",
+      feedback: typeof parsed.feedback === "string" ? parsed.feedback : "",
+      steps: normaliseSteps(parsed.steps),
     };
-    console.log("[recognize-math] returning", result);
+    console.log(
+      `[recognize-math] returning percentage=${result.percentage}, steps=${result.steps.length}`
+    );
     return NextResponse.json(result);
   } catch (e) {
     console.error("[recognize-math] unhandled error", e);

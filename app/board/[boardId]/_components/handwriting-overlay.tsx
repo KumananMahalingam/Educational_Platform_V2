@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CanvasState } from "@/types/canvas";
-import { captureCanvas } from "@/lib/capture-canvas";
+import { captureCanvas, type CanvasBounds } from "@/lib/capture-canvas";
 
 import { ProgressBar } from "./progress-bar";
 
@@ -14,12 +14,27 @@ interface VerificationState {
   feedback: string;
 }
 
+export interface CanvasStepMarker {
+  id: string;
+  x: number;
+  y: number;
+  isCorrect: boolean;
+  label: string;
+  issue: string;
+}
+
 interface HandwritingOverlayProps {
   activeProblemSrc: string | null;
   canvasState: CanvasState;
   onProgressChange: (state: VerificationState) => void;
+  onStepsChange: (steps: CanvasStepMarker[]) => void;
   onStrokeEnd: number | null;
+  camera: { x: number; y: number };
+  computeLayerBounds: () => CanvasBounds | null;
 }
+
+// Same default as the capture function — keep in sync.
+const CAPTURE_PADDING = 60;
 
 const DEFAULT_STATE: VerificationState = {
   isLoading: false,
@@ -31,7 +46,10 @@ const DEFAULT_STATE: VerificationState = {
 export const HandwritingOverlay = ({
   activeProblemSrc,
   onProgressChange,
+  onStepsChange,
   onStrokeEnd,
+  camera,
+  computeLayerBounds,
 }: HandwritingOverlayProps) => {
   const [state, setState] = useState<VerificationState>(DEFAULT_STATE);
   const [problemText, setProblemText] = useState("");
@@ -48,6 +66,24 @@ export const HandwritingOverlay = ({
   useEffect(() => {
     onProgressChangeRef.current = onProgressChange;
   }, [onProgressChange]);
+
+  const onStepsChangeRef = useRef(onStepsChange);
+  useEffect(() => {
+    onStepsChangeRef.current = onStepsChange;
+  }, [onStepsChange]);
+
+  // Keep camera and bounds-getter in refs so panning the canvas doesn't
+  // retrigger the debounced recognition effect — we only want strokes to
+  // drive that, but we still want the *latest* camera/bounds when we do fire.
+  const cameraRef = useRef(camera);
+  useEffect(() => {
+    cameraRef.current = camera;
+  }, [camera]);
+
+  const computeLayerBoundsRef = useRef(computeLayerBounds);
+  useEffect(() => {
+    computeLayerBoundsRef.current = computeLayerBounds;
+  }, [computeLayerBounds]);
 
   // Single source of truth: any time local state moves, push the same snapshot
   // to the parent so the side-panel ProgressBar updates in lock-step with the
@@ -140,15 +176,29 @@ export const HandwritingOverlay = ({
         return;
       }
 
-      const imageBase64 = await captureCanvas();
+      const bounds = computeLayerBoundsRef.current();
+      const imageBase64 = await captureCanvas({
+        bounds,
+        camera: cameraRef.current,
+        padding: CAPTURE_PADDING,
+      });
       if (cancelled) return;
       if (!imageBase64) {
         console.warn("[handwriting] captureCanvas returned null");
         return;
       }
 
+      // Snapshot the bounds we used for this capture so we can interpret
+      // normalised step coordinates from the model later, even if more
+      // strokes have shifted the bounds in the meantime.
+      const captureBounds = bounds;
+
       console.log(
-        `[handwriting] captured image, base64 length=${imageBase64.length}`
+        `[handwriting] captured image, base64 length=${imageBase64.length}, bounds=${
+          bounds
+            ? `${Math.round(bounds.width)}x${Math.round(bounds.height)} @ (${Math.round(bounds.x)},${Math.round(bounds.y)})`
+            : "viewport"
+        }`
       );
       setDebugImage(`data:image/png;base64,${imageBase64}`);
 
@@ -198,10 +248,53 @@ export const HandwritingOverlay = ({
           isCorrect?: boolean;
           percentage?: number;
           feedback?: string;
+          steps?: Array<{
+            label?: string;
+            x?: number;
+            y?: number;
+            isCorrect?: boolean;
+            issue?: string;
+          }>;
         };
         console.log("[handwriting] recognize-math response", data);
 
         if (cancelled) return;
+
+        // Convert the model's normalised step positions back into canvas
+        // coordinates using the bounds + padding we used at capture time.
+        if (captureBounds && Array.isArray(data.steps)) {
+          const vbX = captureBounds.x - CAPTURE_PADDING;
+          const vbY = captureBounds.y - CAPTURE_PADDING;
+          const vbW = captureBounds.width + CAPTURE_PADDING * 2;
+          const vbH = captureBounds.height + CAPTURE_PADDING * 2;
+
+          const markers: CanvasStepMarker[] = data.steps
+            .filter(
+              (s) =>
+                s &&
+                typeof s.y === "number" &&
+                Number.isFinite(s.y)
+            )
+            .map((s, idx) => {
+              const nx =
+                typeof s.x === "number" && Number.isFinite(s.x)
+                  ? Math.max(0, Math.min(1, s.x))
+                  : 0.95;
+              const ny = Math.max(0, Math.min(1, s.y as number));
+              return {
+                id: `step-${idx}`,
+                x: vbX + nx * vbW,
+                y: vbY + ny * vbH,
+                isCorrect: s.isCorrect ?? true,
+                label: typeof s.label === "string" ? s.label : "",
+                issue: typeof s.issue === "string" ? s.issue : "",
+              };
+            });
+
+          onStepsChangeRef.current(markers);
+        } else if (!captureBounds) {
+          onStepsChangeRef.current([]);
+        }
 
         const nextPercentage =
           typeof data.percentage === "number" &&

@@ -43,9 +43,16 @@ import { SelectionBox } from "./selection-box";
 import { SelectionTools } from "./selection-tools";
 import { CursorsPresence } from "./cursors-presence";
 import { ProblemPanel } from "./problem-panel";
-import { HandwritingOverlay } from "./handwriting-overlay";
+import {
+  HandwritingOverlay,
+  type CanvasStepMarker,
+} from "./handwriting-overlay";
+import { StepMarkers } from "./step-markers";
 
-const MAX_LAYERS = 100;
+// High enough to be effectively unlimited for handwriting — each pen stroke
+// becomes a Path layer, and a single line of math working can easily contain
+// 20+ strokes, so the old cap of 100 was being hit during normal use.
+const MAX_LAYERS = 10000;
 const DEFAULT_IMAGE_WIDTH = 400;
 
 interface CanvasProps {
@@ -76,6 +83,7 @@ export const Canvas = ({
     percentage: 0,
     feedback: "Start writing with the pen tool to verify steps in real time.",
   });
+  const [stepMarkers, setStepMarkers] = useState<CanvasStepMarker[]>([]);
 
   const onProgressChange = useCallback((state: {
       isLoading: boolean;
@@ -86,12 +94,61 @@ export const Canvas = ({
       setVerification(state);
   }, []);
 
+  const onStepsChange = useCallback((steps: CanvasStepMarker[]) => {
+      setStepMarkers(steps);
+  }, []);
+
  
 
   useDisableScrollBounce();
   const history = useHistory();
   const canUndo = useCanUndo();
   const canRedo = useCanRedo();
+
+  // Compute the union bounding box of every drawn layer. Used by the
+  // HandwritingOverlay to capture the *entire* working — not just whatever's
+  // in the viewport — so the verifier sees all of the student's process.
+  const computeLayerBounds = useMutation(({ storage }) => {
+    const liveLayers = storage.get("layers");
+    const liveLayerIds = storage.get("layerIds");
+
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+
+    for (let i = 0; i < liveLayerIds.length; i++) {
+      const id = liveLayerIds.get(i);
+      if (!id) continue;
+      const layer = liveLayers.get(id);
+      if (!layer) continue;
+      const x = layer.get("x");
+      const y = layer.get("y");
+      const w = layer.get("width");
+      const h = layer.get("height");
+      if (
+        typeof x !== "number" ||
+        typeof y !== "number" ||
+        typeof w !== "number" ||
+        typeof h !== "number"
+      ) {
+        continue;
+      }
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x + w > maxX) maxX = x + w;
+      if (y + h > maxY) maxY = y + h;
+    }
+
+    if (!Number.isFinite(minX)) return null;
+
+    return {
+      x: minX,
+      y: minY,
+      width: maxX - minX,
+      height: maxY - minY,
+    };
+  }, []);
 
   const insertLayer = useMutation((
     { storage, setMyPresence },
@@ -578,6 +635,12 @@ const handlePointerUp = useCallback((e: React.PointerEvent) => {
     return null;
   });
 
+  // Clear step markers when the active problem changes so old markers don't
+  // linger across problem switches.
+  useEffect(() => {
+    setStepMarkers([]);
+  }, [activeProblemSrc]);
+
   const deleteLayers = useDeleteLayers();
 
   useEffect(() => {
@@ -718,13 +781,17 @@ const handlePointerUp = useCallback((e: React.PointerEvent) => {
               y={0}
             />
           )}
+          <StepMarkers steps={stepMarkers} />
         </g>
       </svg>
       <HandwritingOverlay
         activeProblemSrc={activeProblemSrc}
         canvasState={canvasState}
         onProgressChange={onProgressChange}
+        onStepsChange={onStepsChange}
         onStrokeEnd={strokeEndTick}
+        camera={camera}
+        computeLayerBounds={computeLayerBounds}
       />
     </main>
   );
